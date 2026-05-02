@@ -1,93 +1,128 @@
 import time
 import torch
 from torch import nn
-from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+
 from src.configuration import config
 from src.model.classifier import BertTitleClassifier
 from src.preprocess.dataset import get_dataloader, DataType
 
 
-def train_one_epoch(model, dataloader, device, optimizer, loss_fn):
-    """
-    执行一次训练轮次（epoch）
+# 提前终止训练的工具类（EarlyStopping）
+class EarlyStopping:
+    def __init__(self, patience=2, path=None):
+        """
+  初始化早停机制。
+  :param patience: 容忍验证集 loss 连续几轮不下降（超过即停止）
+  :param path: 模型保存路径
+  """
+        self.patience = patience  # 允许的“无改进”轮数
+        self.counter = 0  # 当前连续“无改进”轮数计数器
+        self.best_score = None  # 当前最佳得分（验证 loss 的负数）
+        self.early_stop = False  # 是否触发早停
+        self.path = path  # 最佳模型保存路径
 
-    :param model: 当前模型
-    :param dataloader: 训练数据加载器
-    :param device: 使用的设备（CPU/GPU）
-    :param optimizer: 优化器
-    :param loss_fn: 损失函数
-    :return: 平均训练损失
+    def __call__(self, val_loss, model):
+        """
+  每轮验证后调用，判断是否早停
+  """
+        score = -val_loss  # 损失越小越好，取负值用于比较
+        if self.best_score is None or score > self.best_score:
+            # 当前是最优模型，更新并保存
+            self.best_score = score
+            self.counter = 0
+            self.save_model(model)
+        else:
+            # 模型未提升，计数器加 1
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+
+    def save_model(self, model):
+        """保存当前模型权重"""
+        torch.save(model.state_dict(), self.path)
+
+
+def run_one_epoch(model, dataloader, device, loss_fn, optimizer=None, is_train=True):
     """
-    model.train()  # 切换到训练模式
+ 执行一次训练轮次（epoch），同时支持训练和验证模式
+ """
     epoch_loss = 0
+    model.train() if is_train else model.eval()
 
-    for batch in tqdm(dataloader, desc="训练"):
-        # 数据移至设备
-        input_ids = batch["input_ids"].to(device)
-        attention_mask = batch["attention_mask"].to(device)
-        labels = batch["label"].to(device)
+    with torch.set_grad_enabled(is_train):
+        for batch in tqdm(dataloader, desc="训练" if is_train else "验证"):
+            input_ids = batch['input_ids'].to(device)
+            attention_mask = batch['attention_mask'].to(device)
+            labels = batch['label'].to(device)
 
-        # 前向传播 + 损失计算
-        outputs = model(input_ids, attention_mask)
-        loss = loss_fn(outputs, labels)
+            # 前向传播
+            outputs = model(input_ids, attention_mask)
+            loss = loss_fn(outputs, labels)
 
-        # 反向传播 + 参数更新
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            # 训练模式：反向传播 + 更新参数
+            if is_train:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-        # 累积损失
-        epoch_loss += loss.item()
+            epoch_loss += loss.item()
 
-    return epoch_loss / len(dataloader)  # 返回平均损失
+    return epoch_loss / len(dataloader)
 
 
 def train():
     """
-    模型训练主函数：
-    - 初始化模型和优化器
-    - 执行多轮训练与验证
-    - 使用 EarlyStopping 保存最佳模型
-    - 写入 TensorBoard 日志
-    """
-    # 设置训练设备
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"设备: {device}")
+ 模型训练主函数
+ """
+    # 设备
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f'训练设备: {device}')
 
-    # 设置 TensorBoard 日志目录
+    # 日志
     log_dir = config.LOGS_DIR / time.strftime("%Y%m%d-%H%M%S")
     writer = SummaryWriter(log_dir=log_dir)
 
-    # 初始化模型（不冻结 BERT 参数）
+    # 模型
     model = BertTitleClassifier(freeze_bert=False).to(device)
 
-    # 加载训练和验证数据
+    # 数据
     train_loader = get_dataloader(DataType.TRAIN)
+    valid_loader = get_dataloader(DataType.VALID)
 
-    # 设置损失函数与优化器
-    criterion = nn.CrossEntropyLoss()
-    optimizer = Adam(model.parameters(), lr=config.LEARNING_RATE)
+    # 优化器
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
 
-    # 训练过程
-    best_loss = float("inf")
+    # 早停
+    early_stopping = EarlyStopping(
+        patience=2,
+        path=config.MODELS_DIR / 'model.pt'
+    )
+
+    # 开始训练
     for epoch in range(1, config.EPOCHS + 1):
-        print(f"========== Epoch {epoch} ==========")
+        print(f'\n========== Epoch {epoch} ==========')
 
         # 训练
-        train_loss = train_one_epoch(model, train_loader, device, optimizer, criterion)
+        train_loss = run_one_epoch(model, train_loader, device, loss_fn, optimizer, is_train=True)
 
-        # 打印训练与验证信息
-        print(f"训练集-loss: {train_loss:.4f}")
+        # 验证
+        valid_loss = run_one_epoch(model, valid_loader, device, loss_fn, is_train=False)
 
-        # 记录日志
-        writer.add_scalar("Loss/train", train_loss, epoch)
+        # 打印
+        print(f"训练 Loss: {train_loss:.4f}")
+        print(f"验证 Loss: {valid_loss:.4f}")
 
-        # 保存最佳模型
-        if train_loss < best_loss:
-            best_loss = train_loss
-            torch.save(model.state_dict(), config.MODELS_DIR / "model.pt")
+        # 记录
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/valid', valid_loss, epoch)
 
-    # 关闭日志记录器
+        # 早停
+        early_stopping(valid_loss, model)
+        if early_stopping.early_stop:
+            print("✅ 早停触发，训练结束")
+            break
+
     writer.close()
