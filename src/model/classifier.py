@@ -13,7 +13,7 @@ class BertTitleClassifier(nn.Module):
         super().__init__()
 
         # 加载预训练的 BERT 模型
-        self.bert = AutoModel.from_pretrained(config.PRE_TRAINED_DIR / 'bert-base-chinese')
+        self.bert = AutoModel.from_pretrained(str(config.PRE_TRAINED_DIR / 'bert-base-chinese'))
 
         # 定义分类器：将 BERT 输出的 CLS 向量映射到类别空间
         self.classifier = nn.Linear(self.bert.config.hidden_size, config.NUM_CLASSES)

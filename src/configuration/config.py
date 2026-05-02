@@ -16,6 +16,7 @@ PROCESSED_DATA_DIR = RAW_DATA_DIR / "processed"
 PRE_TRAINED_DIR = BASE_DIR / "pretrained"
 MODELS_DIR = BASE_DIR / "models"
 LOGS_DIR = BASE_DIR / "logs"
+BERT_MODEL_DIR = str(PRE_TRAINED_DIR / "bert-base-chinese")
 
 SEQ_LEN = int(os.getenv("SEQ_LEN", "64"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "32"))
