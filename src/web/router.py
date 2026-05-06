@@ -14,9 +14,9 @@ def predict(request: PredictRequest) -> PredictResponse:
   if not text:
    raise HTTPException(status_code=400, detail="输入文本不能为空")
 
-  pred_id, pred_label = predict_service(text)
+  pred_id, pred_label, confidence = predict_service(text)
 
-  return PredictResponse(text=text, pred_id=pred_id, pred_label=pred_label)
+  return PredictResponse(text=text, pred_id=pred_id, pred_label=pred_label, confidence=confidence)
 
  except Exception as e:
   raise HTTPException(status_code=500, detail=f"预测失败:{str(e)}")

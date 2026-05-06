@@ -10,3 +10,4 @@ class PredictResponse(BaseModel):
  text: str
  pred_id: int
  pred_label: str
+ confidence: float
