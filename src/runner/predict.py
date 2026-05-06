@@ -8,29 +8,30 @@ from src.model.classifier import BertTitleClassifier
 
 def predict_batch(model, input_ids, attention_mask):
     """
-    对一批输入进行预测，返回类别索引。
+    对一批输入进行预测，返回类别索引和置信度。
 
     :param model: 已加载好的分类模型
     :param input_ids: 输入 token 的 id（tensor，shape: [batch_size, seq_len]）
     :param attention_mask: 注意力 mask（tensor，shape 同上）
-    :return: 预测的类别索引（tensor，shape: [batch_size]）
+    :return: (预测的类别索引, 置信度) 两个 tensor
     """
-    with torch.no_grad():  # 关闭梯度计算，加速并节省显存
-        outputs = model(input_ids, attention_mask)  # 得到 logits
-        preds = torch.argmax(outputs, dim=1)  # 每个样本取最大值索引作为预测
-    return preds
+    with torch.no_grad():
+        outputs = model(input_ids, attention_mask)
+        probs = torch.softmax(outputs, dim=1)
+        confidences, preds = torch.max(probs, dim=1)
+    return preds, confidences
 
 
 def predict_text(text, model, tokenizer, device, label_feature):
     """
-    对单条文本进行预测，返回类别 ID 和标签名。
+    对单条文本进行预测，返回类别 ID、标签名和置信度。
 
     :param text: 输入文本字符串
     :param model: 已加载好的模型
     :param tokenizer: 用于编码输入文本的 tokenizer
     :param device: 使用的计算设备
     :param label_feature: label 特征映射（HuggingFace 的 ClassLabel 对象）
-    :return: (类别 ID, 类别名称)
+    :return: (类别 ID, 类别名称, 置信度)
     """
     # 文本编码成输入格式（padding、截断等）
     encoded = tokenizer(
@@ -46,13 +47,14 @@ def predict_text(text, model, tokenizer, device, label_feature):
     attention_mask = encoded['attention_mask'].to(device)
 
     # 调用批量预测函数
-    preds = predict_batch(model, input_ids, attention_mask)
+    preds, confidences = predict_batch(model, input_ids, attention_mask)
 
     # 转换为类别 id 和标签名
     pred_id = preds[0].item()
     pred_label = label_feature.int2str(pred_id)
+    confidence = confidences[0].item()
 
-    return pred_id, pred_label
+    return pred_id, pred_label, confidence
 
 
 def run_predict():
@@ -81,5 +83,5 @@ def run_predict():
             continue
 
         # 调用预测函数
-        pred_id, pred_label = predict_text(text, model, tokenizer, device, label_feature)
-        print(f"预测类别ID: {pred_id}，类别名称: {pred_label}")
+        pred_id, pred_label, confidence = predict_text(text, model, tokenizer, device, label_feature)
+        print(f"预测类别ID: {pred_id}，类别名称: {pred_label}，置信度: {confidence:.4f}")
